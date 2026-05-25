@@ -1,0 +1,44 @@
+name: Fetch Stock Data
+
+on:
+  schedule:
+    # 매일 07:30 UTC = 16:30 KST (장 마감 후)
+    # 평일(월~금)만 실행
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:
+    # GitHub Actions 탭에서 수동 실행도 가능
+    inputs:
+      bond_yield:
+        description: '국채 3년 기준금리 % (기본값 3.5)'
+        required: false
+        default: '3.5'
+
+jobs:
+  fetch-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: 패키지 설치
+        run: pip install -r scripts/requirements.txt
+
+      - name: 주식 데이터 수집 및 Supabase 업로드
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BOND_YIELD: ${{ github.event.inputs.bond_yield || '3.5' }}
+        run: python scripts/fetch_data.py
+
+      - name: 완료 알림
+        if: success()
+        run: echo "✅ 데이터 수집 완료 - $(date '+%Y-%m-%d %H:%M KST')"
