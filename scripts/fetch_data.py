@@ -98,11 +98,10 @@ def parse_naver_page(html: str) -> dict:
     roe       = get_metric('ROE(지배주주)')
     bps       = get_metric('BPS(원)')
 
-    # 배당수익률 - '%' 포함 형태
-    m_div = re.search(r'배당수익률.*?<em[^>]*>\s*([+-]?[\d,. ]+)\s*</em>', html, re.DOTALL)
-    if not m_div:
-        m_div = re.search(r'배당수익률.*?<td[^>]*>\s*([+-]?[\d,. ]+)\s*%?', html, re.DOTALL)
-    div_yield = _num(m_div.group(1)) if m_div else 0.0
+    # 배당수익률 - get_metric 방식 (600자 이내로 제한해 오탐 방지)
+    div_yield = get_metric('배당수익률')
+    # 비정상 값 클리핑: 실제 배당수익률은 0~30% 범위
+    div_yield = max(0.0, min(div_yield, 30.0))
 
     # EPS (fwd) - 다음 분기 EPS 예상치 (있으면)
     # Naver에는 별도 제공 안함 → trailing EPS 그대로 사용
@@ -139,6 +138,10 @@ def get_one(row: dict) -> dict | None:
         if price <= 0:
             return None
 
+        pbr = d['pbr']
+        if pbr < 0:   # 자본잠식 — PBR 점수 계산에서 제외 (0 처리)
+            pbr = 0.0
+
         return {
             'ticker':    code,
             'name':      row['name'],
@@ -147,7 +150,7 @@ def get_one(row: dict) -> dict | None:
             'mktcap':    d['mktcap'],
             'high52w':   d['high52w'],
             'low52w':    d['low52w'],
-            'pbr':       d['pbr'],
+            'pbr':       pbr,
             'roe':       d['roe'],
             'div_yield': d['div_yield'],
             'eps':       d['eps'],
