@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Value Sheet 퀀트 대시보드</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- 로딩 오버레이 -->
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="loading-box">
+      <div class="loading-spinner"></div>
+      <div class="loading-title">데이터 불러오는 중...</div>
+      <div class="loading-step" id="loading-step">Supabase에 연결 중</div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dashboard">
+
+    <!-- Header -->
+    <header class="header">
+      <h1 class="dashboard-title">Value Sheet <span>퀀트 대시보드</span></h1>
+      <div class="header-right">
+        <div class="sort-tabs">
+          <span class="sort-label">분석 종목 선택</span>
+          <div class="tab-group">
+            <button class="sort-tab active" onclick="setSortMode('avg', this)">종합평균점수</button>
+            <button class="sort-tab" onclick="setSortMode('rel', this)">상대순위</button>
+          </div>
+        </div>
+        <div class="stock-selector-row">
+          <select id="stock-select" onchange="selectStock()"></select>
+          <button class="refresh-btn" onclick="refreshData()" title="새로고침">↻</button>
+        </div>
+        <div class="updated-label" id="updated-label"></div>
+      </div>
+    </header>
+
+    <!-- KPI Cards -->
+    <section class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-label">기준가</div>
+        <div class="kpi-value" id="kpi-price">-</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">시가총액</div>
+        <div class="kpi-value" id="kpi-mktcap">-</div>
+      </div>
+      <div class="kpi-card highlight-green">
+        <div class="kpi-label">RRR (Return / Risk)</div>
+        <div class="kpi-value rrr" id="kpi-rrr">-</div>
+      </div>
+      <div class="kpi-card highlight-green">
+        <div class="kpi-label">종합 평균점수</div>
+        <div class="kpi-value score" id="kpi-score">-</div>
+        <div class="kpi-sub" id="kpi-score-rank"></div>
+      </div>
+    </section>
+
+    <!-- Gauge Row -->
+    <section class="gauge-row">
+      <div class="gauge-card">
+        <div class="gauge-card-title">52주 저가 대비 현재가 위치 <span class="date-tag" id="today-date"></span></div>
+        <div class="gauge-wrap">
+          <canvas id="gauge-52w" width="260" height="155"></canvas>
+          <div class="gauge-value" id="val-52w">-</div>
+        </div>
+        <div class="gauge-footer">
+          <span>저가: <span id="low-52w">-</span></span>
+          <span>고가: <span id="high-52w">-</span></span>
+        </div>
+      </div>
+      <div class="gauge-card">
+        <div class="gauge-card-title">ROE (자기자본이익률)</div>
+        <div class="gauge-wrap">
+          <canvas id="gauge-roe" width="260" height="155"></canvas>
+          <div class="gauge-value" id="val-roe">-</div>
+        </div>
+        <div class="gauge-footer center"><span id="rank-roe">-</span></div>
+      </div>
+      <div class="gauge-card">
+        <div class="gauge-card-title">PBR (주가순자산비율)</div>
+        <div class="gauge-wrap">
+          <canvas id="gauge-pbr" width="260" height="155"></canvas>
+          <div class="gauge-value" id="val-pbr">-</div>
+        </div>
+        <div class="gauge-footer center"><span id="rank-pbr">-</span></div>
+      </div>
+    </section>
+
+    <!-- Detail Metrics -->
+    <section class="detail-section">
+      <div class="detail-title">📊 세부 가치 평가 지표 (<span id="detail-stock-name">-</span>)</div>
+      <div class="detail-row">
+        <div class="detail-card">
+          <div class="detail-label">예상 시가배당률</div>
+          <div class="detail-value" id="det-div-yield">-</div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-label">국채시가배당률</div>
+          <div class="detail-value" id="det-bond-ratio">-</div>
+        </div>
+        <div class="detail-card highlight-teal">
+          <div class="detail-label">국채배당 점수</div>
+          <div class="detail-value" id="det-bond-score">-</div>
+          <div class="detail-sub" id="det-bond-rank">-</div>
+        </div>
+        <div class="detail-card highlight-teal">
+          <div class="detail-label">YoY EPS 성장률</div>
+          <div class="detail-value" id="det-eps-growth">-</div>
+          <div class="detail-sub" id="det-eps-date">-</div>
+        </div>
+        <div class="detail-card" id="det-rel-card">
+          <div class="detail-label">상대순위 변동</div>
+          <div class="detail-value" id="det-rel-rank">-</div>
+          <div class="detail-sub" id="det-rel-total">-</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Supabase JS SDK (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <!-- 내 Supabase 설정 -->
+  <script src="config.js"></script>
+  <!-- 앱 로직 -->
+  <script src="app.js"></script>
+</body>
+</html>
