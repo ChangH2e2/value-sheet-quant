@@ -1,0 +1,6 @@
+flask>=2.3
+flask-cors>=4.0
+pykrx>=1.0.47
+FinanceDataReader>=0.9.50
+pandas>=2.0
+numpy>=1.24
