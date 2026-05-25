@@ -1,5 +1,5 @@
 pykrx>=1.0.47
-FinanceDataReader>=0.9.50
+FinanceDataReader
 pandas>=2.0
 numpy>=1.24
 supabase>=2.0
