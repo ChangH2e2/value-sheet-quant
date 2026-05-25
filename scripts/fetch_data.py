@@ -77,31 +77,28 @@ def parse_naver_page(html: str) -> dict:
     mktcap = mktcap_eok * 1e8  # 억원 → 원
 
     # 투자지표: PER, EPS, PBR, ROE (각 항목 뒤 <em> 또는 <td> 숫자)
-    def get_metric(label: str) -> float:
+    def get_metric(label: str, window: int = 600) -> float:
         idx = html.find(label)
         if idx < 0:
             return 0.0
-        chunk = html[idx: idx + 600]
-        # em 태그 안 숫자 (부호 포함)
+        chunk = html[idx: idx + window]
         m_em = re.search(r'<em[^>]*>\s*([+-]?[\d,. ]+)\s*</em>', chunk)
         if m_em:
             return _num(m_em.group(1))
-        # td 태그 숫자
         m_td = re.search(r'<td[^>]*>\s*([+-]?[\d,. ]+)\s*</td>', chunk)
         if m_td:
             return _num(m_td.group(1))
         return 0.0
 
     per       = get_metric('PER(배)')
-    eps_raw   = get_metric('EPS(원)')       # 원 단위 EPS
+    eps_raw   = get_metric('EPS(원)')
     pbr       = get_metric('PBR(배)')
     roe       = get_metric('ROE(지배주주)')
     bps       = get_metric('BPS(원)')
 
-    # 배당수익률 - get_metric 방식 (600자 이내로 제한해 오탐 방지)
-    div_yield = get_metric('배당수익률')
-    # 비정상 값 클리핑: 실제 배당수익률은 0~30% 범위
-    div_yield = max(0.0, min(div_yield, 30.0))
+    # 배당수익률은 툴팁 div로 인해 라벨~값 간격이 넓어 1200자 창 사용
+    div_yield = get_metric('배당수익률', 1200)
+    div_yield = max(0.0, min(div_yield, 30.0))  # 비현실적 값 클리핑
 
     # EPS (fwd) - 다음 분기 EPS 예상치 (있으면)
     # Naver에는 별도 제공 안함 → trailing EPS 그대로 사용
