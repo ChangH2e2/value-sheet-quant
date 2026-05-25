@@ -1,206 +1,206 @@
 """
 Value Sheet 퀀트 대시보드 - GitHub Actions 데이터 수집기
-pykrx로 KOSPI/KOSDAQ 전종목 데이터 수집 → Supabase 업로드
+yfinance 기반 (pykrx는 GitHub Actions IP 차단됨)
 
-환경변수 필요:
-  SUPABASE_URL              : Supabase 프로젝트 URL
-  SUPABASE_SERVICE_ROLE_KEY : Supabase service_role 키 (쓰기 권한)
-  BOND_YIELD                : 국채 3년 기준금리 % (기본값 3.5)
+종목 리스트: KRX KIND 공개 페이지 (HTML 다운로드)
+가격/지표:   yfinance (Yahoo Finance, 전세계 접근 가능)
 """
-
-import os, sys, traceback
-from datetime import datetime, timedelta
+import os, sys, traceback, io, time
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import numpy as np
-from pykrx import stock as krx
+import requests
+import yfinance as yf
 from supabase import create_client
 
-# ── 설정 ─────────────────────────────────────────────────────
-SUPABASE_URL  = os.environ['SUPABASE_URL']
-SUPABASE_KEY  = os.environ['SUPABASE_SERVICE_ROLE_KEY']
-BOND_YIELD    = float(os.environ.get('BOND_YIELD', '3.5'))
-BATCH_SIZE    = 300   # Supabase upsert 1회 최대 행 수
+SUPABASE_URL = os.environ['SUPABASE_URL']
+SUPABASE_KEY = os.environ['SUPABASE_SERVICE_ROLE_KEY']
+BOND_YIELD   = float(os.environ.get('BOND_YIELD', '3.5'))
+BATCH_SIZE   = 300
+MAX_WORKERS  = 15
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-
-# ── 유틸 ─────────────────────────────────────────────────────
-
-def last_biz_day(dt=None):
-    d = dt if dt else datetime.now()
-    for _ in range(10):
-        if d.weekday() < 5:
-            return d.strftime('%Y%m%d')
-        d -= timedelta(days=1)
-    return d.strftime('%Y%m%d')
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://kind.krx.co.kr/",
+    "Accept-Language": "ko-KR,ko;q=0.9",
+}
 
 
-def fmt_price(v):  return f"{int(v):,}원"
+# ── 종목 리스트 ──────────────────────────────────────────────
+
+def fetch_krx_list() -> pd.DataFrame:
+    print("  종목 리스트 수집 중 (KRX KIND)...")
+    configs = [
+        ("KOSPI",  "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13",                          ".KS"),
+        ("KOSDAQ", "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13&marketType=kosdaqMkt", ".KQ"),
+    ]
+    dfs = []
+    for mkt, url, suffix in configs:
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            df = pd.read_html(io.BytesIO(r.content), encoding='euc-kr')[0]
+            # 컬럼명 통일
+            code_col = next(c for c in df.columns if '코드' in str(c))
+            name_col = next(c for c in df.columns if '회사명' in str(c) or '종목명' in str(c))
+            df = df.rename(columns={code_col: 'ticker', name_col: 'name'})
+            df['ticker']    = df['ticker'].astype(str).str.zfill(6)
+            df['market']    = mkt
+            df['yf_ticker'] = df['ticker'] + suffix
+            dfs.append(df[['ticker', 'name', 'market', 'yf_ticker']])
+            print(f"    {mkt}: {len(df)}개")
+        except Exception as e:
+            print(f"    {mkt} 실패: {e}")
+
+    if not dfs:
+        raise RuntimeError("종목 리스트를 가져올 수 없습니다")
+
+    return pd.concat(dfs, ignore_index=True).drop_duplicates('ticker')
+
+
+# ── yfinance 단일 종목 ───────────────────────────────────────
+
+def get_one(row: dict) -> dict | None:
+    try:
+        t  = yf.Ticker(row['yf_ticker'])
+        fi = t.fast_info
+
+        price = getattr(fi, 'last_price', None)
+        if not price or price <= 0:
+            return None
+
+        mktcap = getattr(fi, 'market_cap', 0) or 0
+        high52 = getattr(fi, 'fifty_two_week_high', price) or price
+        low52  = getattr(fi, 'fifty_two_week_low',  price * 0.7) or price * 0.7
+
+        info      = t.info
+        pbr       = float(info.get('priceToBook')    or 0)
+        roe       = float(info.get('returnOnEquity') or 0) * 100   # 0.15 → 15%
+        div_yield = float(info.get('dividendYield')  or 0) * 100
+        eps       = float(info.get('trailingEps')    or 0)
+        eps_fwd   = float(info.get('forwardEps')     or eps)
+
+        return {
+            'ticker':    row['ticker'],
+            'name':      row['name'],
+            'market':    row['market'],
+            'price':     price,
+            'mktcap':    mktcap,
+            'high52w':   high52,
+            'low52w':    low52,
+            'pbr':       pbr,
+            'roe':       roe,
+            'div_yield': div_yield,
+            'eps':       eps,
+            'eps_fwd':   eps_fwd,
+        }
+    except Exception:
+        return None
+
+
+# ── 포맷 헬퍼 ────────────────────────────────────────────────
+
+def fmt_price(v):
+    return f"{int(v):,}원"
+
 def fmt_mktcap(v):
     v = int(v)
     if v >= 10**12:
         jo = v // 10**12; eok = (v % 10**12) // 10**8
         return f"{jo}조{eok:,}억" if eok else f"{jo}조"
-    return f"{v // 10**8:,}억" if v >= 10**8 else f"{v // 10**4:,}만"
-
-
-# ── 종목명 수집 ───────────────────────────────────────────────
-
-def fetch_names(today):
-    print("  종목명 수집 중...")
-    names = {}
-    try:
-        import FinanceDataReader as fdr
-        for mkt in ('KOSPI', 'KOSDAQ'):
-            df = fdr.StockListing(mkt)
-            code_col = next(c for c in df.columns if c in ('Symbol','Code'))
-            name_col = next(c for c in df.columns if c in ('Name','ISU_NM','ShortName'))
-            for _, row in df.iterrows():
-                names[str(row[code_col]).zfill(6)] = row[name_col]
-    except Exception as e:
-        print(f"    FDR 실패({e}), pykrx fallback 사용")
-        for mkt in ('KOSPI', 'KOSDAQ'):
-            for t in krx.get_market_ticker_list(today, market=mkt):
-                try: names[t] = krx.get_market_ticker_name(t)
-                except: names[t] = t
-    print(f"    종목명 {len(names)}개 수집 완료")
-    return names
-
-
-# ── 52주 고저 (주간 샘플링) ───────────────────────────────────
-
-def fetch_52w(today):
-    today_dt = datetime.strptime(today, '%Y%m%d')
-    year_ago = today_dt - timedelta(days=365)
-    highs, lows = {}, {}
-    d, total, done = year_ago, 52, 0
-
-    print("  52주 고저 수집 중 (가장 오래 걸립니다)...")
-    while d <= today_dt:
-        ds = last_biz_day(d)
-        for mkt in ('KOSPI', 'KOSDAQ'):
-            try:
-                ohlcv = krx.get_market_ohlcv_by_ticker(ds, market=mkt)
-                if ohlcv.empty: continue
-                for tk in ohlcv.index:
-                    h, l = ohlcv.at[tk, '고가'], ohlcv.at[tk, '저가']
-                    if h > 0:
-                        highs[tk] = max(highs.get(tk, 0), h)
-                        lows[tk]  = min(lows.get(tk, float('inf')), l)
-            except: pass
-        d += timedelta(weeks=1)
-        done += 1
-        if done % 10 == 0:
-            print(f"    {done}/{total}주 완료")
-
-    return highs, lows
+    if v >= 10**8:
+        return f"{v // 10**8:,}억"
+    return f"{v // 10**4:,}만"
 
 
 # ── 메인 ─────────────────────────────────────────────────────
 
 def main():
-    today    = last_biz_day()
-    year_ago = last_biz_day(datetime.strptime(today, '%Y%m%d') - timedelta(days=365))
-    print(f"\n[{datetime.now():%H:%M:%S}] ▶ 데이터 수집 시작 (기준일: {today})")
+    print(f"\n[{datetime.now():%H:%M:%S}] ▶ 데이터 수집 시작")
 
-    # 1. 시가총액 & 현재가
-    print("  시가총액 수집...")
-    cap_df = pd.concat([
-        krx.get_market_cap_by_ticker(today, market='KOSPI'),
-        krx.get_market_cap_by_ticker(today, market='KOSDAQ'),
-    ])
+    # 1. 종목 리스트
+    stocks_df = fetch_krx_list()
+    rows = stocks_df.to_dict('records')
+    print(f"  총 {len(rows)}개 종목 처리 예정")
 
-    # 2. 펀더멘털
-    print("  펀더멘털 수집...")
-    fund_today = krx.get_market_fundamental_by_ticker(today, market='ALL')
+    # 2. yfinance 병렬 수집
+    print(f"  yfinance 수집 중 (병렬 {MAX_WORKERS} workers)...")
+    results, done = [], 0
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(get_one, r): r for r in rows}
+        for f in as_completed(futures):
+            data = f.result()
+            if data:
+                results.append(data)
+            done += 1
+            if done % 200 == 0:
+                print(f"    {done}/{len(rows)} 처리 (유효: {len(results)})")
 
-    # 3. 전년 EPS
-    print("  전년 EPS 수집...")
-    try:   fund_prev = krx.get_market_fundamental_by_ticker(year_ago, market='ALL')
-    except: fund_prev = pd.DataFrame()
+    if not results:
+        raise RuntimeError("유효한 종목 데이터 없음")
 
-    # 4. 종목명
-    names = fetch_names(today)
-
-    # 5. 52주 고저
-    highs, lows = fetch_52w(today)
-
-    # ── 데이터 병합 ──────────────────────────────────────────
-    print("  지표 계산 중...")
-    df = cap_df[['종가', '시가총액']].copy()
-    df = df.join(fund_today[['PBR', 'PER', 'EPS', 'BPS', 'DIV']], how='inner')
-    df = df[(df['종가'] > 100) & (df['PBR'] > 0) & (df['BPS'] > 0)].copy()
-
-    df['name']    = df.index.map(lambda t: names.get(t, t))
-    cur           = df['종가']
-    df['high52w'] = df.index.map(lambda t: highs.get(t, cur[t]))
-    df['low52w']  = df.index.map(lambda t: lows.get(t,  cur[t] * 0.7))
-
-    rng          = (df['high52w'] - df['low52w']).clip(1)
-    df['pos52w'] = ((cur - df['low52w']) / rng * 100).clip(0, 100)
-    df['ROE']    = (df['EPS'] / df['BPS'] * 100).clip(-200, 300)
-    df['div_y']  = df['DIV'].clip(0, 50)
-    df['bond_r'] = (df['div_y'] / BOND_YIELD).clip(0, 20)
-
-    if not fund_prev.empty and 'EPS' in fund_prev.columns:
-        prev = fund_prev['EPS'].reindex(df.index).fillna(0)
-        mask = prev != 0
-        df['epsG'] = 0.0
-        df.loc[mask, 'epsG'] = (
-            (df.loc[mask,'EPS'] - prev[mask]) / prev[mask].abs() * 100
-        ).clip(-999, 999)
-    else:
-        df['epsG'] = 0.0
-
-    ret  = ((cur - df['low52w']) / df['low52w'].clip(1) * 100).clip(0, 1000)
-    risk = ((df['high52w'] - df['low52w']) / df['low52w'].clip(1) * 100).clip(1, 1000)
-    df['RRR'] = (ret / risk).clip(0, 1).round(3)
-    df['bScore'] = (df['bond_r'] / df['bond_r'].quantile(0.99).clip(0.01) * 100).clip(0, 100)
-
+    df = pd.DataFrame(results)
+    df = df[df['pbr'] > 0].copy()   # PBR 없는 종목 제외
     total = len(df)
     print(f"  유효 종목: {total}개")
 
-    # ── 퀀트 점수 ────────────────────────────────────────────
+    # 3. 파생 지표
+    rng            = (df['high52w'] - df['low52w']).clip(1)
+    df['pos52w']   = ((df['price'] - df['low52w']) / rng * 100).clip(0, 100)
+    df['bond_r']   = (df['div_yield'] / BOND_YIELD).clip(0, 20)
+    df['eps_g']    = np.where(
+        df['eps_fwd'] != 0,
+        ((df['eps'] - df['eps_fwd']) / df['eps_fwd'].abs().clip(0.01) * 100).clip(-500, 500),
+        0.0
+    )
+    ret          = ((df['price'] - df['low52w']) / df['low52w'].clip(1) * 100).clip(0, 1000)
+    risk         = (rng / df['low52w'].clip(1) * 100).clip(1, 1000)
+    df['rrr']    = (ret / risk).clip(0, 1)
+    df['bscr']   = (df['bond_r'] / df['bond_r'].quantile(0.99).clip(0.01) * 100).clip(0, 100)
+
+    # 4. 퀀트 점수
     def pr(s, asc=False): return s.rank(ascending=asc, pct=True, method='average') * 100
 
-    df['s1'] = pr(df['pos52w'], True)
-    df['s2'] = pr(df['ROE'])
-    df['s3'] = pr(df['PBR'],    True)
-    df['s4'] = pr(df['div_y'])
-    df['s5'] = pr(df['epsG'])
-    df['s6'] = pr(df['RRR'])
+    df['s1'] = pr(df['pos52w'],   True)
+    df['s2'] = pr(df['roe'])
+    df['s3'] = pr(df['pbr'],      True)
+    df['s4'] = pr(df['div_yield'])
+    df['s5'] = pr(df['eps_g'])
+    df['s6'] = pr(df['rrr'])
     df['s7'] = pr(df['bond_r'])
 
     W = np.array([1.5, 1.5, 1.0, 1.0, 1.0, 1.0, 1.0])
     df['composite'] = (df[['s1','s2','s3','s4','s5','s6','s7']] * W).sum(axis=1) / W.sum()
     df['composite'] = df['composite'].round(2)
     df['avg_rank']  = df['composite'].rank(ascending=False, method='min').astype(int)
-    df['roe_rank']  = df['ROE'].rank(ascending=False, method='min').astype(int)
-    df['pbr_rank']  = df['PBR'].rank(ascending=True,  method='min').astype(int)
+    df['roe_rank']  = df['roe'].rank(ascending=False, method='min').astype(int)
+    df['pbr_rank']  = df['pbr'].rank(ascending=True,  method='min').astype(int)
     df['bond_rank'] = df['bond_r'].rank(ascending=False, method='min').astype(int)
 
-    # 이전 순위 비교 (Supabase에서 읽기)
+    # 이전 순위 비교
     old_ranks = {}
     try:
         res = sb.table('stocks').select('ticker, avg_rank').execute()
-        for row in res.data:
-            old_ranks[row['ticker']] = row['avg_rank']
-    except: pass
+        for r in res.data:
+            old_ranks[r['ticker']] = r['avg_rank']
+    except Exception:
+        pass
 
-    eps_date = f"분기보고서 ({datetime.strptime(today,'%Y%m%d').strftime('%Y.%m')})"
-
-    records = []
-    for ticker, row in df.iterrows():
-        old_r = old_ranks.get(ticker)
-        rel   = (old_r - int(row['avg_rank'])) if old_r else 0
-        rrr_v = float(row['RRR'])
+    eps_date = f"분기보고서 ({datetime.now().strftime('%Y.%m')})"
+    records  = []
+    for _, row in df.iterrows():
+        rel   = old_ranks.get(row['ticker'], int(row['avg_rank'])) - int(row['avg_rank'])
+        rrr_v = float(row['rrr'])
         rrr_s = 'MAX' if rrr_v >= 0.85 else str(round(rrr_v * 10, 1))
 
         records.append({
-            'ticker':       ticker,
+            'ticker':       row['ticker'],
             'name':         row['name'],
-            'price':        fmt_price(row['종가']),
-            'mktcap':       fmt_mktcap(row['시가총액']),
+            'price':        fmt_price(row['price']),
+            'mktcap':       fmt_mktcap(row['mktcap']),
             'rrr':          rrr_s,
             'score':        float(row['composite']),
             'avg_rank':     int(row['avg_rank']),
@@ -208,33 +208,31 @@ def main():
             'pos52w':       round(float(row['pos52w']), 1),
             'low52w':       f"{int(row['low52w']):,}",
             'high52w':      f"{int(row['high52w']):,}",
-            'roe':          round(float(row['ROE']), 1),
+            'roe':          round(float(row['roe']), 1),
             'roe_rank':     int(row['roe_rank']),
-            'pbr':          round(float(row['PBR']), 2),
+            'pbr':          round(float(row['pbr']), 2),
             'pbr_rank':     int(row['pbr_rank']),
-            'div_yield':    f"{round(float(row['div_y']), 1)}%",
+            'div_yield':    f"{round(float(row['div_yield']), 1)}%",
             'bond_ratio':   f"{round(float(row['bond_r']), 1)}배",
-            'bond_score':   int(row['bScore']),
+            'bond_score':   int(row['bscr']),
             'bond_rank':    int(row['bond_rank']),
-            'eps_growth':   f"{round(float(row['epsG']), 1)}%",
+            'eps_growth':   f"{round(float(row['eps_g']), 1)}%",
             'eps_date':     eps_date,
             'rel_rank_val': rel,
             'total':        total,
             'updated_at':   datetime.utcnow().isoformat(),
         })
 
-    # ── Supabase 업로드 ──────────────────────────────────────
-    print(f"\n  Supabase 업로드 중 ({total}개, 배치 {BATCH_SIZE}개씩)...")
+    # 5. Supabase 업로드
+    print(f"\n  Supabase 업로드 중 ({total}개)...")
     for i in range(0, len(records), BATCH_SIZE):
-        batch = records[i:i + BATCH_SIZE]
-        sb.table('stocks').upsert(batch, on_conflict='ticker').execute()
+        sb.table('stocks').upsert(records[i:i + BATCH_SIZE], on_conflict='ticker').execute()
         print(f"    {min(i + BATCH_SIZE, total)}/{total} 완료")
 
     sb.table('meta').upsert([
-        {'key': 'last_updated',  'value': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
-        {'key': 'total_stocks',  'value': str(total)},
-        {'key': 'base_date',     'value': today},
-        {'key': 'bond_yield',    'value': str(BOND_YIELD)},
+        {'key': 'last_updated', 'value': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
+        {'key': 'total_stocks', 'value': str(total)},
+        {'key': 'bond_yield',   'value': str(BOND_YIELD)},
     ], on_conflict='key').execute()
 
     print(f"\n[{datetime.now():%H:%M:%S}] ✔ 완료! {total}개 종목 업로드")
@@ -243,6 +241,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
         sys.exit(1)
