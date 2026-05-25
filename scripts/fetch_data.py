@@ -2,7 +2,7 @@
 Value Sheet 퀀트 대시보드 - GitHub Actions 데이터 수집기
 yfinance 기반 (pykrx는 GitHub Actions IP 차단됨)
 
-종목 리스트: KRX KIND 공개 페이지 (HTML 다운로드)
+종목 리스트: 리포지토리 내 data/krx_stocks.csv (KRX KIND에서 로컬 생성, 커밋)
 가격/지표:   yfinance (Yahoo Finance, 전세계 접근 가능)
 """
 import os, sys, traceback, io, time
@@ -10,7 +10,6 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import numpy as np
-import requests
 import yfinance as yf
 from supabase import create_client
 
@@ -22,43 +21,19 @@ MAX_WORKERS  = 15
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://kind.krx.co.kr/",
-    "Accept-Language": "ko-KR,ko;q=0.9",
-}
-
 
 # ── 종목 리스트 ──────────────────────────────────────────────
 
 def fetch_krx_list() -> pd.DataFrame:
-    print("  종목 리스트 수집 중 (KRX KIND)...")
-    configs = [
-        ("KOSPI",  "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13",                          ".KS"),
-        ("KOSDAQ", "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13&marketType=kosdaqMkt", ".KQ"),
-    ]
-    dfs = []
-    for mkt, url, suffix in configs:
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=30)
-            r.raise_for_status()
-            df = pd.read_html(io.BytesIO(r.content), encoding='euc-kr')[0]
-            # 컬럼명 통일
-            code_col = next(c for c in df.columns if '코드' in str(c))
-            name_col = next(c for c in df.columns if '회사명' in str(c) or '종목명' in str(c))
-            df = df.rename(columns={code_col: 'ticker', name_col: 'name'})
-            df['ticker']    = df['ticker'].astype(str).str.zfill(6)
-            df['market']    = mkt
-            df['yf_ticker'] = df['ticker'] + suffix
-            dfs.append(df[['ticker', 'name', 'market', 'yf_ticker']])
-            print(f"    {mkt}: {len(df)}개")
-        except Exception as e:
-            print(f"    {mkt} 실패: {e}")
-
-    if not dfs:
-        raise RuntimeError("종목 리스트를 가져올 수 없습니다")
-
-    return pd.concat(dfs, ignore_index=True).drop_duplicates('ticker')
+    # data/krx_stocks.csv는 로컬에서 생성 후 리포에 커밋된 파일
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path   = os.path.join(script_dir, '..', 'data', 'krx_stocks.csv')
+    csv_path   = os.path.normpath(csv_path)
+    print(f"  종목 리스트 로드: {csv_path}")
+    df = pd.read_csv(csv_path, dtype={'ticker': str})
+    df['ticker'] = df['ticker'].str.zfill(6)
+    print(f"  총 {len(df)}개 (KOSPI: {len(df[df['market']=='KOSPI'])}, KOSDAQ: {len(df[df['market']=='KOSDAQ'])})")
+    return df
 
 
 # ── yfinance 단일 종목 ───────────────────────────────────────
