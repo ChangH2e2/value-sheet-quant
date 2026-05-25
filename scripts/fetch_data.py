@@ -221,13 +221,13 @@ def main():
     def pr(s, asc=False):
         return s.rank(ascending=asc, pct=True, method='average') * 100
 
-    df['s1'] = pr(df['pos52w'],   True)   # 저가 근접 ↑
-    df['s2'] = pr(df['roe'])               # ROE ↑
-    df['s3'] = pr(df['pbr'],      True)   # 저PBR ↑
-    df['s4'] = pr(df['div_yield'])         # 배당률 ↑
-    df['s5'] = pr(df['eps_g'])             # EPS 성장 ↑
-    df['s6'] = pr(df['rrr'])               # RRR ↑
-    df['s7'] = pr(df['bond_r'])            # 국채 대비 ↑
+    df['s1'] = pr(df['pos52w'])            # 저가 근접 ↑ (낮을수록 好)
+    df['s2'] = pr(df['roe'],       True)   # ROE ↑
+    df['s3'] = pr(df['pbr'])               # 저PBR ↑ (낮을수록 好)
+    df['s4'] = pr(df['div_yield'], True)   # 배당률 ↑
+    df['s5'] = pr(df['eps_g'],     True)   # EPS 성장 ↑
+    df['s6'] = pr(df['rrr'],       True)   # RRR ↑
+    df['s7'] = pr(df['bond_r'],    True)   # 국채 대비 ↑
 
     W = np.array([1.5, 1.5, 1.0, 1.0, 1.0, 1.0, 1.0])
     df['composite'] = (df[['s1','s2','s3','s4','s5','s6','s7']] * W).sum(axis=1) / W.sum()
