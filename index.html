@@ -20,49 +20,67 @@
     </div>
   </div>
 
-  <div class="dashboard">
+  <!-- 헤더 -->
+  <header class="page-header">
+    <div class="header-inner">
+      <div>
+        <div class="dashboard-title">Value Sheet <span>퀀트 대시보드</span></div>
+        <div class="title-sub" id="updated-label">데이터 로딩 중...</div>
+      </div>
 
-    <!-- Header -->
-    <header class="header">
-      <h1 class="dashboard-title">Value Sheet <span>퀀트 대시보드</span></h1>
-      <div class="header-right">
-        <div class="sort-tabs">
-          <span class="sort-label">분석 종목 선택</span>
-          <div class="tab-group">
-            <button class="sort-tab active" onclick="setSortMode('avg', this)">종합평균점수</button>
-            <button class="sort-tab" onclick="setSortMode('rel', this)">상대순위</button>
+      <div class="header-controls">
+        <!-- 1행: 정렬 탭 + 시장 필터 -->
+        <div class="controls-row">
+          <span style="font-size:11px;color:#6a8aaa;">정렬</span>
+          <div class="tab-group" id="sort-tabs">
+            <button class="tab-btn active" onclick="setSortMode('avg', this)">종합점수순</button>
+            <button class="tab-btn" onclick="setSortMode('rel', this)">상대순위순</button>
+          </div>
+          <span style="font-size:11px;color:#6a8aaa;">시장</span>
+          <div class="tab-group" id="market-tabs">
+            <button class="tab-btn active" onclick="setMarket('all', this)">전체</button>
+            <button class="tab-btn" onclick="setMarket('KOSPI', this)">KOSPI</button>
+            <button class="tab-btn" onclick="setMarket('KOSDAQ', this)">KOSDAQ</button>
           </div>
         </div>
-        <div class="stock-selector-row">
-          <select id="stock-select" onchange="selectStock()"></select>
+
+        <!-- 2행: 검색 + 종목 선택 + 새로고침 -->
+        <div class="controls-row">
+          <input type="text" id="search-input" class="search-input" placeholder="종목 검색..." oninput="onSearch()" />
+          <select id="stock-select" class="stock-select" onchange="selectStock()"></select>
           <button class="refresh-btn" onclick="refreshData()" title="새로고침">↻</button>
         </div>
-        <div class="updated-label" id="updated-label"></div>
       </div>
-    </header>
+    </div>
+  </header>
 
-    <!-- KPI Cards -->
+  <div class="dashboard">
+
+    <!-- KPI 카드 -->
     <section class="kpi-row">
       <div class="kpi-card">
         <div class="kpi-label">기준가</div>
         <div class="kpi-value" id="kpi-price">-</div>
+        <div class="kpi-sub" id="kpi-mktcap">시가총액 -</div>
       </div>
       <div class="kpi-card">
-        <div class="kpi-label">시가총액</div>
-        <div class="kpi-value" id="kpi-mktcap">-</div>
+        <div class="kpi-label">52주 위치 (저가→고가)</div>
+        <div class="kpi-value" id="kpi-pos52w">-</div>
+        <div class="kpi-sub" id="kpi-52w-range">저가 - / 고가 -</div>
       </div>
-      <div class="kpi-card highlight-green">
-        <div class="kpi-label">RRR (Return / Risk)</div>
+      <div class="kpi-card highlight-blue">
+        <div class="kpi-label">RRR (수익/위험 비율)</div>
         <div class="kpi-value rrr" id="kpi-rrr">-</div>
+        <div class="kpi-sub">높을수록 유리 (MAX = 8.5+)</div>
       </div>
       <div class="kpi-card highlight-green">
-        <div class="kpi-label">종합 평균점수</div>
+        <div class="kpi-label">종합 퀀트 점수</div>
         <div class="kpi-value score" id="kpi-score">-</div>
-        <div class="kpi-sub" id="kpi-score-rank"></div>
+        <div class="kpi-sub" id="kpi-score-rank">-</div>
       </div>
     </section>
 
-    <!-- Gauge Row -->
+    <!-- 게이지 Row -->
     <section class="gauge-row">
       <div class="gauge-card">
         <div class="gauge-card-title">52주 저가 대비 현재가 위치 <span class="date-tag" id="today-date"></span></div>
@@ -71,8 +89,8 @@
           <div class="gauge-value" id="val-52w">-</div>
         </div>
         <div class="gauge-footer">
-          <span>저가: <span id="low-52w">-</span></span>
-          <span>고가: <span id="high-52w">-</span></span>
+          <span>저가: <b id="low-52w">-</b></span>
+          <span>고가: <b id="high-52w">-</b></span>
         </div>
       </div>
       <div class="gauge-card">
@@ -93,16 +111,28 @@
       </div>
     </section>
 
-    <!-- Detail Metrics -->
+    <!-- 점수 구성 바 -->
+    <section class="score-bars-section">
+      <div class="section-title">
+        📊 점수 구성 요소
+        <span class="stock-name-tag" id="bars-stock-name"></span>
+      </div>
+      <div class="score-bars-grid" id="score-bars"></div>
+    </section>
+
+    <!-- 세부 가치 평가 -->
     <section class="detail-section">
-      <div class="detail-title">📊 세부 가치 평가 지표 (<span id="detail-stock-name">-</span>)</div>
+      <div class="section-title">
+        🔍 세부 가치 지표
+        <span class="stock-name-tag" id="detail-stock-name"></span>
+      </div>
       <div class="detail-row">
         <div class="detail-card">
           <div class="detail-label">예상 시가배당률</div>
           <div class="detail-value" id="det-div-yield">-</div>
         </div>
         <div class="detail-card">
-          <div class="detail-label">국채시가배당률</div>
+          <div class="detail-label">국채 대비 배당 비율</div>
           <div class="detail-value" id="det-bond-ratio">-</div>
         </div>
         <div class="detail-card highlight-teal">
@@ -123,13 +153,34 @@
       </div>
     </section>
 
+    <!-- 상위 랭킹 테이블 -->
+    <section class="ranking-section">
+      <div class="section-title" id="ranking-title">🏆 상위 랭킹 Top 20</div>
+      <div class="ranking-table-wrap">
+        <table class="ranking-table">
+          <thead>
+            <tr>
+              <th class="center">순위</th>
+              <th>종목명</th>
+              <th class="center">시장</th>
+              <th class="right">종합점수</th>
+              <th class="center">52주위치</th>
+              <th class="right">ROE</th>
+              <th class="right">PBR</th>
+              <th class="center">RRR</th>
+              <th class="right">배당률</th>
+              <th class="right">시가총액</th>
+            </tr>
+          </thead>
+          <tbody id="ranking-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
   </div>
 
-  <!-- Supabase JS SDK (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <!-- 내 Supabase 설정 -->
   <script src="config.js"></script>
-  <!-- 앱 로직 -->
   <script src="app.js"></script>
 </body>
 </html>
