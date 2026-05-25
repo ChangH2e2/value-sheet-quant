@@ -5,7 +5,7 @@ yfinance 기반 (pykrx는 GitHub Actions IP 차단됨)
 종목 리스트: 리포지토리 내 data/krx_stocks.csv (KRX KIND에서 로컬 생성, 커밋)
 가격/지표:   yfinance (Yahoo Finance, 전세계 접근 가능)
 """
-import os, sys, traceback, io, time
+import os, sys, traceback, time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
@@ -17,7 +17,7 @@ SUPABASE_URL = os.environ['SUPABASE_URL']
 SUPABASE_KEY = os.environ['SUPABASE_SERVICE_ROLE_KEY']
 BOND_YIELD   = float(os.environ.get('BOND_YIELD', '3.5'))
 BATCH_SIZE   = 300
-MAX_WORKERS  = 15
+MAX_WORKERS  = 8   # 낮게 유지해서 crumb 세션 안정화
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -51,12 +51,17 @@ def get_one(row: dict) -> dict | None:
         high52 = getattr(fi, 'fifty_two_week_high', price) or price
         low52  = getattr(fi, 'fifty_two_week_low',  price * 0.7) or price * 0.7
 
-        info      = t.info
-        pbr       = float(info.get('priceToBook')    or 0)
-        roe       = float(info.get('returnOnEquity') or 0) * 100   # 0.15 → 15%
-        div_yield = float(info.get('dividendYield')  or 0) * 100
-        eps       = float(info.get('trailingEps')    or 0)
-        eps_fwd   = float(info.get('forwardEps')     or eps)
+        # t.info 실패 시(401 Crumb 만료 등) 가격 데이터만이라도 저장
+        pbr = roe = div_yield = eps = eps_fwd = 0.0
+        try:
+            info      = t.info
+            pbr       = float(info.get('priceToBook')    or 0)
+            roe       = float(info.get('returnOnEquity') or 0) * 100
+            div_yield = float(info.get('dividendYield')  or 0) * 100
+            eps       = float(info.get('trailingEps')    or 0)
+            eps_fwd   = float(info.get('forwardEps')     or eps)
+        except Exception:
+            pass
 
         return {
             'ticker':    row['ticker'],
@@ -118,9 +123,10 @@ def main():
         raise RuntimeError("유효한 종목 데이터 없음")
 
     df = pd.DataFrame(results)
-    df = df[df['pbr'] > 0].copy()   # PBR 없는 종목 제외
+    # 가격 데이터만 있는 종목도 포함 (PBR/ROE 등은 없을 수 있음)
     total = len(df)
-    print(f"  유효 종목: {total}개")
+    has_fundamentals = int((df['pbr'] > 0).sum())
+    print(f"  유효 종목: {total}개 (기본지표 보유: {has_fundamentals}개)")
 
     # 3. 파생 지표
     rng            = (df['high52w'] - df['low52w']).clip(1)
