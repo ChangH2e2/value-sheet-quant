@@ -1,0 +1,8 @@
+# 로컬 캐시 (커밋 불필요)
+data_cache.json
+__pycache__/
+*.pyc
+.env
+
+# 로컬 실행용 (선택)
+# server.py와 run.bat은 로컬 테스트용이므로 커밋해도 무방
